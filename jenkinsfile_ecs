@@ -1,0 +1,91 @@
+pipeline {
+    agent none
+
+    environment {
+        HARBOR_REGISTRY = "harbor.mycompany.com"
+        HARBOR_PROJECT = "myproject"
+        IMAGE_NAME = "myapp"
+        IMAGE_TAG = "latest"
+        AWS_REGION = "eu-west-1"
+        TF_DIR = "infra"
+    }
+
+    stages {
+
+        /*
+         * 1) BUILD IMAGE AVEC KANIKO ET PUSH DANS HARBOR
+         */
+        stage('Build & Push Image with Kaniko') {
+            agent { label 'kaniko-agent' }
+
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'harbor-creds',
+                                                 usernameVariable: 'HARBOR_USER',
+                                                 passwordVariable: 'HARBOR_PASS')]) {
+                    sh """
+                        mkdir -p /kaniko/.docker
+
+                        # Création du fichier Docker config.json pour login Harbor
+                        cat <<EOF > /kaniko/.docker/config.json
+                        {
+                          "auths": {
+                            "${HARBOR_REGISTRY}": {
+                              "username": "${HARBOR_USER}",
+                              "password": "${HARBOR_PASS}"
+                            }
+                          }
+                        }
+EOF
+
+                        /kaniko/executor \
+                          --context `pwd` \
+                          --dockerfile Dockerfile \
+                          --destination ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${IMAGE_NAME}:${IMAGE_TAG}
+                    """
+                }
+            }
+        }
+
+        /*
+         * 2) TERRAFORM APPLY POUR METTRE À JOUR LA TASK DEFINITION ECS
+         */
+        stage('Terraform Apply') {
+            agent { label 'terraform-agent' }
+
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                                  credentialsId: 'aws-creds']]) {
+
+                    dir("${TF_DIR}") {
+                        sh """
+                            terraform init
+                            terraform plan -out=tfplan
+                            terraform apply -auto-approve tfplan
+                        """
+                    }
+                }
+            }
+        }
+
+        /*
+         * 3) UPDATE ECS SERVICE POUR LANCER LA NOUVELLE TASK
+         */
+        stage('Deploy ECS Task') {
+            agent { label 'awscli-agent' }
+
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                                  credentialsId: 'aws-creds']]) {
+
+                    sh """
+                        aws ecs update-service \
+                            --cluster my-ecs-cluster \
+                            --service my-ecs-service \
+                            --force-new-deployment \
+                            --region ${AWS_REGION}
+                    """
+                }
+            }
+        }
+    }
+}
