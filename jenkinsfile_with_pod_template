@@ -1,0 +1,58 @@
+pipeline {
+  agent {
+    kubernetes {
+      yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: jnlp
+      image: jenkins/inbound-agent:latest
+      args: ['\$(JENKINS_SECRET)', '\$(JENKINS_NAME)']
+      tty: true
+
+    - name: terraform
+      image: hashicorp/terraform:latest
+      command: ['cat']
+      tty: true
+
+    - name: awscli
+      image: amazon/aws-cli:latest
+      command: ['cat']
+      tty: true
+"""
+    }
+  }
+
+  environment {
+    AWS_CREDS = credentials('aws-creds')      // AWS access key + secret key
+    AWS_ACCOUNT = credentials('aws-account')  // account ID or other secret
+    AWS_REGION = "us-east-1"
+  }
+
+  stages {
+    stage('Terraform Version') {
+      steps {
+        container('terraform') {
+          sh '''
+            terraform version
+          '''
+        }
+      }
+    }
+
+    stage('AWS CLI Version') {
+      steps {
+        container('awscli') {
+          sh '''
+            echo "AWS Access Key is available: $AWS_CREDS_USR"
+            echo "AWS Secret Access Key is available: $AWS_CREDS_PSW"
+            echo "AWS Account ID is available: $AWS_ACCOUNT"
+
+            aws --version
+          '''
+        }
+      }
+    }
+  }
+}
