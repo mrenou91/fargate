@@ -1,0 +1,262 @@
+#########################################
+# VARIABLES
+#########################################
+variable "cluster_name" {
+  type = string
+}
+
+variable "service_name" {
+  type = string
+}
+
+variable "aws_region" {
+  type    = string
+  default = "eu-west-1"
+}
+
+variable "email_alert" {
+  type = string
+}
+
+#########################################
+# SNS TOPIC + EMAIL SUBSCRIPTION
+#########################################
+
+resource "aws_sns_topic" "alerts" {
+  name = "${var.cluster_name}-alerts"
+}
+
+resource "aws_sns_topic_subscription" "email" {
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "email"
+  endpoint  = var.email_alert
+}
+
+#########################################
+# CLOUDWATCH LOG GROUP
+#########################################
+
+resource "aws_cloudwatch_log_group" "ecs_service" {
+  name              = "/ecs/${var.service_name}"
+  retention_in_days = 14
+}
+
+#########################################
+# METRIC FILTER (ERREURS LOGS)
+#########################################
+
+resource "aws_cloudwatch_log_metric_filter" "error_logs" {
+  name           = "${var.service_name}-error-filter"
+  log_group_name = aws_cloudwatch_log_group.ecs_service.name
+  pattern        = "\"ERROR\""
+
+  metric_transformation {
+    name      = "${var.service_name}_error_count"
+    namespace = "ECS/Errors"
+    value     = "1"
+  }
+}
+
+#########################################
+# ALARME CPU
+#########################################
+
+resource "aws_cloudwatch_metric_alarm" "cpu_high" {
+  alarm_name          = "${var.service_name}-cpu-high"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/ECS"
+  statistic           = "Average"
+  period              = 60
+  evaluation_periods  = 3
+  threshold           = 75
+  comparison_operator = "GreaterThanThreshold"
+
+  dimensions = {
+    ClusterName = var.cluster_name
+    ServiceName = var.service_name
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+}
+
+#########################################
+# ALARME MEMORY (Container Insights)
+#########################################
+
+resource "aws_cloudwatch_metric_alarm" "memory_high" {
+  alarm_name          = "${var.service_name}-memory-high"
+  metric_name         = "MemoryUtilization"
+  namespace           = "ECS/ContainerInsights"
+  statistic           = "Average"
+  period              = 60
+  evaluation_periods  = 3
+  threshold           = 75
+  comparison_operator = "GreaterThanThreshold"
+
+  dimensions = {
+    ClusterName = var.cluster_name
+    ServiceName = var.service_name
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+}
+
+#########################################
+# ALARME ERREURS (logs ERROR)
+#########################################
+
+resource "aws_cloudwatch_metric_alarm" "errors" {
+  alarm_name          = "${var.service_name}-errors"
+  namespace           = "ECS/Errors"
+  metric_name         = "${var.service_name}_error_count"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 5
+  evaluation_periods  = 1
+  period              = 60
+  statistic           = "Sum"
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+}
+
+#########################################
+# ALARME NETWORK IN
+#########################################
+
+resource "aws_cloudwatch_metric_alarm" "network_in_high" {
+  alarm_name          = "${var.service_name}-network-in-high"
+  namespace           = "ECS/ContainerInsights"
+  metric_name         = "NetworkRxBytes"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 2
+  threshold           = 250000000  # 250 MB
+  comparison_operator = "GreaterThanThreshold"
+
+  dimensions = {
+    ClusterName = var.cluster_name
+    ServiceName = var.service_name
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+}
+
+#########################################
+# ALARME NETWORK OUT
+#########################################
+
+resource "aws_cloudwatch_metric_alarm" "network_out_high" {
+  alarm_name          = "${var.service_name}-network-out-high"
+  namespace           = "ECS/ContainerInsights"
+  metric_name         = "NetworkTxBytes"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 2
+  threshold           = 250000000  # 250 MB
+  comparison_operator = "GreaterThanThreshold"
+
+  dimensions = {
+    ClusterName = var.cluster_name
+    ServiceName = var.service_name
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+}
+
+#########################################
+# ALARME TASK FAILURES (ECS)
+#########################################
+
+resource "aws_cloudwatch_metric_alarm" "task_failures" {
+  alarm_name          = "${var.service_name}-task-failures"
+  namespace           = "ECS/ContainerInsights"
+  metric_name         = "TaskExitCount"
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanThreshold"
+
+  dimensions = {
+    ClusterName = var.cluster_name
+    ServiceName = var.service_name
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+}
+
+#########################################
+# ALARME THROTTLING (CPU throttling)
+#########################################
+
+resource "aws_cloudwatch_metric_alarm" "throttling" {
+  alarm_name          = "${var.service_name}-cpu-throttling"
+  namespace           = "ECS/ContainerInsights"
+  metric_name         = "CpuUtilized"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 90
+  period              = 60
+  evaluation_periods  = 2
+  statistic           = "Average"
+
+  dimensions = {
+    ClusterName = var.cluster_name
+    ServiceName = var.service_name
+  }
+
+  alarm_actions = [aws_sns_topic.alerts.arn]
+}
+
+#########################################
+# CLOUDWATCH DASHBOARD
+#########################################
+
+resource "aws_cloudwatch_dashboard" "ecs_dashboard" {
+  dashboard_name = "${var.service_name}-dashboard"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        "type" : "metric",
+        "width" : 12,
+        "height" : 6,
+        "properties" : {
+          "title" : "CPU & Memory Utilization",
+          "metrics" : [
+            ["AWS/ECS", "CPUUtilization", "ClusterName", var.cluster_name, "ServiceName", var.service_name],
+            ["ECS/ContainerInsights", "MemoryUtilization", "ClusterName", var.cluster_name, "ServiceName", var.service_name]
+          ],
+          "period" : 60,
+          "stat" : "Average"
+        }
+      },
+      {
+        "type" : "metric",
+        "width" : 12,
+        "height" : 6,
+        "properties" : {
+          "title" : "Network",
+          "metrics" : [
+            ["ECS/ContainerInsights", "NetworkRxBytes", "ClusterName", var.cluster_name, "ServiceName", var.service_name],
+            ["ECS/ContainerInsights", "NetworkTxBytes", "ClusterName", var.cluster_name, "ServiceName", var.service_name]
+          ],
+          "period" : 60,
+          "stat" : "Sum"
+        }
+      },
+      {
+        "type" : "metric",
+        "width" : 12,
+        "height" : 6,
+        "properties" : {
+          "title" : "Task Failures & Errors",
+          "metrics" : [
+            ["ECS/ContainerInsights", "TaskExitCount", "ClusterName", var.cluster_name, "ServiceName", var.service_name],
+            ["ECS/Errors", "${var.service_name}_error_count"]
+          ],
+          "period" : 60,
+          "stat" : "Sum"
+        }
+      }
+    ]
+  })
+}
