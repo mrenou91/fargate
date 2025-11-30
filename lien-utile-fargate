@@ -1,0 +1,6 @@
+https://github.com/nexgeneerz/aws-scenario-ecs-fargate/blob/main/infra/certificates.tf
+https://www.gyden.io/en/content-hub/how-to-setup-amazon-ecs-fargate-using-terraform
+https://registry.terraform.io/modules/Rishang/fargate/aws/latest/examples/ecs-alb-r53?tab=outputs
+https://www.freecodecamp.org/news/amazon-ecs-terms-and-architecture-807d8c4960fd/
+https://medium.com/@neamulkabiremon/build-a-production-grade-aws-ecs-fargate-cluster-with-terraform-modular-scalable-ci-cd-ready-07b0c5d40e6f
+https://github.com/neamulkabiremon/terraform-aws-ecs-fargate-infra/blob/main/variables.tf
